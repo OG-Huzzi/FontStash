@@ -1,0 +1,66 @@
+<h2>How should font data get into the app?</h2>
+<p class="subtitle">Three approaches for Phase 1 — Google Fonts only (~1,500 families). The choice affects build time, bundle size, and how search/filter feel.</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Committed JSON + client-side Fuse.js <span style="color:#E8FF57;font-size:12px;">(Recommended)</span></h3>
+      <p>A standalone build script pulls the full Google Fonts catalog once, normalizes to your schema, runs the LLM mood-tagger, and writes a single <code>fonts.json</code> (~1,500 entries, ~600KB gzipped) committed to the repo. At build time, Next.js statically generates <code>/font/[slug]</code> pages from it. The homepage hydrates the JSON in the browser and builds a Fuse.js index in memory once. Search &amp; filters are fully client-side, instant, no API calls.</p>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Truly static — no serverless function, no runtime API calls, deployable to any static host</li>
+          <li>Search is instant (&lt;50ms), works offline once loaded</li>
+          <li>SEO pages generate at build, not request time</li>
+          <li>Repo is self-contained — rebuild only when refreshing the catalog</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>~600KB JSON shipped to client (acceptable, loads once, cached)</li>
+          <li>Font catalog freshness requires re-running the pipeline script (manual refresh)</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Edge API route fetches Google at runtime</h3>
+      <p>No committed JSON. A Next.js edge function fetches the Google Fonts catalog on the first request and caches it at the edge. Fuse.js index builds server-side per request (or edge-cached). Homepage calls this endpoint.</p>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Catalog is always fresh, no manual refresh</li>
+          <li>Nothing large committed to repo</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>No longer "fully static" — contradicts your no-backend constraint</li>
+          <li>Cold-start latency on first request, edge cache complexity</li>
+          <li>SEO pages can't be statically generated from runtime data</li>
+          <li>Mood tagging can't happen at runtime (LLM call per request = cost + latency)</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybrid: committed JSON, but lazy-chunked</h3>
+      <p>Same as A, but the JSON is split into ~30 chunks (~50 fonts each) loaded on-demand as the user scrolls or filters. Fuse.js index built incrementally. Initial payload drops to ~40KB.</p>
+      <div class="pros-cons" style="margin-top:12px;">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Smallest initial payload (~40KB)</li>
+          <li>Best first-load performance metric</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Fuse.js can't search fonts that haven't been loaded yet — typing a query may miss fonts in unloaded chunks</li>
+          <li>Significant complexity (chunk loading, partial index merging, sort/filter across chunks)</li>
+          <li>"Search 3,000+ fonts" promise breaks if search is scoped to loaded chunks only</li>
+          <li>Over-engineered for 600KB of data</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p style="margin-top:24px;color:#888;font-size:13px;">My recommendation is <strong style="color:#F2F2F2;">A</strong> — it matches your "fully static, no backend" constraint exactly, gives instant client-side search, and 600KB gzipped is a one-time cost that loads once and caches forever. Click to select, or tell me in the terminal.</p>
