@@ -13,7 +13,31 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const GOOGLE_API_KEY = 'AIzaSyBtGLyU1O2NslKi-B5SAV67I6WtolSEQ8w';
+// Load environment variables from .env.local if present
+try {
+  const envPath = path.join(__dirname, '..', '.env.local');
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    envContent.split('\n').forEach(line => {
+      const parts = line.split('=');
+      if (parts.length >= 2) {
+        const key = parts[0].trim();
+        const val = parts.slice(1).join('=').trim().replace(/^['"]|['"]$/g, '');
+        if (key && !key.startsWith('#')) {
+          process.env[key] = val;
+        }
+      }
+    });
+  }
+} catch (e) {
+  // Ignore env loading errors
+}
+
+const GOOGLE_API_KEY = process.env.GOOGLE_FONTS_API_KEY;
+
+if (!GOOGLE_API_KEY) {
+  console.warn('⚠️ Warning: GOOGLE_FONTS_API_KEY is not defined. Google Fonts API fetch might fail.');
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
