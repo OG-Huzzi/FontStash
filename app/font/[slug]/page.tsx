@@ -6,8 +6,14 @@ interface Props {
   params: { slug: string };
 }
 
+export const dynamicParams = true;
+
 export async function generateStaticParams() {
-  return allFonts.map((font) => ({ slug: font.slug }));
+  // Pre-render only the most popular fonts at build time.
+  // Remaining 4k+ font pages render on demand, then redirect to `/?font=slug`.
+  // This keeps deep links + SEO metadata without a 4k-page static build.
+  const top = [...allFonts].sort((a, b) => b.popularity - a.popularity).slice(0, 100);
+  return top.map((font) => ({ slug: font.slug }));
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {

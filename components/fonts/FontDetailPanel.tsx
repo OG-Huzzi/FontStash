@@ -4,12 +4,13 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useFontStore } from '@/store/useFontStore';
 import { useToast } from '@/components/ui/Toast';
-import { getSuggestedPairings, allFonts } from '@/lib/fonts';
+import { getSuggestedPairings, getSimilarFonts, allFonts, getFontBySlug } from '@/lib/fonts';
 import { getContrastBadges, getContrastRatio } from '@/lib/contrast';
+import { ensureFontStylesheet, toSafeNextFontImport, toVariationSettings } from '@/lib/fontLoader';
 import { FAVORITE_KEYS, useLocalStorageList } from '@/lib/storage';
 import type { Font, PreviewMode } from '@/lib/types';
 
-const PREVIEW_TEXTS: Record<PreviewMode, string> = {
+const PREVIEW_TEXTS: Record<Exclude<PreviewMode, 'waterfall'>, string> = {
   sentence: 'The quick brown fox jumps over the lazy dog',
   paragraph:
     'Typography is the art and technique of arranging type to make written language legible, readable and appealing when displayed. The arrangement of type involves selecting typefaces, point sizes, line lengths, line spacing, and letter spacing.',
@@ -18,20 +19,15 @@ const PREVIEW_TEXTS: Record<PreviewMode, string> = {
   custom: '',
 };
 
+const WATERFALL_SIZES = [12, 18, 24, 32, 48, 72];
+
 const WEIGHT_NAMES: Record<number, string> = {
   100: 'Thin', 200: 'ExtraLight', 300: 'Light', 400: 'Regular',
   500: 'Medium', 600: 'SemiBold', 700: 'Bold', 800: 'ExtraBold', 900: 'Black',
 };
 
 function loadFont(font: Font) {
-  if (typeof document === 'undefined') return;
-  const linkId = `font-panel-${font.slug}`;
-  if (document.getElementById(linkId)) return;
-  const link = document.createElement('link');
-  link.id = linkId;
-  link.rel = 'stylesheet';
-  link.href = font.importUrl;
-  document.head.appendChild(link);
+  void ensureFontStylesheet(font);
 }
 
 interface SliderRowProps {
@@ -107,6 +103,7 @@ export function FontDetailPanel() {
     isPanelOpen,
     closePanel,
     setSelectedFont,
+    navigationSlugs,
     customWeight, setCustomWeight,
     customSize, setCustomSize,
     customLetterSpacing, setCustomLetterSpacing,
@@ -118,12 +115,14 @@ export function FontDetailPanel() {
     previewMode, setPreviewMode,
     customPreviewText, setCustomPreviewText,
     setHeadingFont,
+    setBodyFont,
   } = useFontStore();
   const { toggle: toggleFavorite, has: isFavorite } = useLocalStorageList(FAVORITE_KEYS.fonts);
   const { showToast } = useToast();
 
   const panelRef = useRef<HTMLDivElement>(null);
   const [suggestedPairings, setSuggestedPairings] = useState<Font[]>([]);
+  const [similarFonts, setSimilarFonts] = useState<Font[]>([]);
 
   // Load font + suggested pairings when font changes
   useEffect(() => {
@@ -134,28 +133,30 @@ export function FontDetailPanel() {
         .map((slug) => allFonts.find((f) => f.slug === slug))
         .filter(Boolean) as Font[]
     );
+    setSimilarFonts(getSimilarFonts(selectedFont, 6));
     // Sync URL only when on the homepage (shallow — no route change)
   }, [selectedFont]);
 
-  // Keyboard: Escape closes; ← / → navigates fonts
+  // Keyboard: Escape closes; ← / → navigates fonts (filtered list first)
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (!isPanelOpen) return;
       if (e.key === 'Escape') { closePanel(); return; }
 
-      // Arrow navigation: find adjacent font in allFonts list
+      // Arrow navigation: prefer the current filtered grid order, fall back to catalog.
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && selectedFont) {
-        const idx = allFonts.findIndex((f) => f.slug === selectedFont.slug);
+        const navList = navigationSlugs.length > 0 ? navigationSlugs : allFonts.map((f) => f.slug);
+        const idx = navList.findIndex((slug) => slug === selectedFont.slug);
         if (idx === -1) return;
-        const next = e.key === 'ArrowRight'
-          ? allFonts[idx + 1]
-          : allFonts[idx - 1];
+        const nextSlug = e.key === 'ArrowRight' ? navList[idx + 1] : navList[idx - 1];
+        if (!nextSlug) return;
+        const next = getFontBySlug(nextSlug) ?? allFonts.find((f) => f.slug === nextSlug);
         if (next) setSelectedFont(next);
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [isPanelOpen, closePanel, selectedFont, setSelectedFont]);
+  }, [isPanelOpen, closePanel, selectedFont, setSelectedFont, navigationSlugs]);
 
   // Prevent body scroll
   useEffect(() => {
@@ -181,8 +182,9 @@ export function FontDetailPanel() {
   const handleUsePairing = useCallback((pairedFont: Font) => {
     if (!selectedFont) return;
     setHeadingFont(selectedFont);
+    setBodyFont(pairedFont);
     router.push(`/pairs?h=${selectedFont.slug}&b=${pairedFont.slug}`);
-  }, [selectedFont, setHeadingFont, router]);
+  }, [selectedFont, setHeadingFont, setBodyFont, router]);
 
   const handleFavorite = useCallback(() => {
     if (!selectedFont) return;
@@ -200,20 +202,20 @@ export function FontDetailPanel() {
   const contrastRatio = getContrastRatio(textColor, bgColor);
   const contrastBadges = getContrastBadges(contrastRatio);
 
-  const currentPreviewText = previewMode === 'custom' ? customPreviewText : PREVIEW_TEXTS[previewMode];
+  const currentPreviewText = previewMode === 'custom' ? customPreviewText : previewMode === 'waterfall' ? 'The quick brown fox jumps over the lazy dog' : PREVIEW_TEXTS[previewMode];
 
-  // Clamp customWeight to an available weight
-  const safeWeight = font.weights.includes(customWeight)
-    ? customWeight
-    : font.weights.reduce((p, c) => Math.abs(c - customWeight) < Math.abs(p - customWeight) ? c : p, font.weights[0] ?? 400);
+  // Clamp customWeight to an available weight (variable fonts allow any 100-900)
+  const safeWeight = font.isVariable
+    ? Math.min(900, Math.max(100, Math.round(customWeight)))
+    : font.weights.includes(customWeight)
+      ? customWeight
+      : font.weights.reduce((p, c) => Math.abs(c - customWeight) < Math.abs(p - customWeight) ? c : p, font.weights[0] ?? 400);
 
   const cssImport = `@import url('${font.importUrl}');`;
   const cssFontFamily = `font-family: ${font.fontFamily};`;
-  const nextjsImport = `import { ${font.name.replace(/ /g, '_')} } from 'next/font/google';`;
+  const nextjsImport = toSafeNextFontImport(font);
   const aiPrompt = `Use "${font.name}" as the primary typeface.\n\nTypography settings:\n- font-family: ${font.fontFamily}\n- font-weight: ${safeWeight}\n- font-size: ${customSize}px\n- letter-spacing: ${customLetterSpacing}px\n- line-height: ${customLineHeight}\n- font-style: ${customItalic ? 'italic' : 'normal'}\n- text color: ${textColor}\n- background color: ${bgColor}\n\nImport via:\n@import url('${font.importUrl}');\n\nApply it to a clean, modern interface and keep spacing readable for designers reviewing type samples.`;
-  const variableCss = font.variableAxes.length > 0
-    ? `font-variation-settings: ${font.variableAxes.map((a) => `'${a}' 400`).join(', ')};`
-    : null;
+  const variableCss = toVariationSettings(font, safeWeight);
 
   return (
     <>
@@ -298,10 +300,12 @@ export function FontDetailPanel() {
           {/* Live preview */}
           <div className="px-6 py-5 border-b border-border" style={{ backgroundColor: bgColor }}>
             {/* Preview mode tabs */}
-            <div className="flex items-center gap-1 mb-4 overflow-x-auto scrollbar-hide">
-              {(['sentence', 'paragraph', 'alphabet', 'numbers', 'custom'] as PreviewMode[]).map((mode) => (
+            <div className="flex items-center gap-1 mb-4 overflow-x-auto scrollbar-hide" role="tablist" aria-label="Preview modes">
+              {(['sentence', 'paragraph', 'alphabet', 'numbers', 'waterfall', 'custom'] as PreviewMode[]).map((mode) => (
                 <button
                   key={mode}
+                  role="tab"
+                  aria-selected={previewMode === mode}
                   onClick={() => setPreviewMode(mode)}
                   className={`text-[11px] font-mono px-2.5 py-1 rounded flex-shrink-0 border transition-none ${
                     previewMode === mode
@@ -334,6 +338,28 @@ export function FontDetailPanel() {
                 }}
                 rows={4}
               />
+            ) : previewMode === 'waterfall' ? (
+              <div className="space-y-2" style={{ minHeight: '120px' }}>
+                {WATERFALL_SIZES.map((size) => (
+                  <div key={size} className="flex items-baseline gap-3 overflow-hidden">
+                    <span className="w-8 flex-shrink-0 text-[9px] font-mono" style={{ color: textColor, opacity: 0.5 }}>{size}</span>
+                    <p
+                      className="truncate"
+                      style={{
+                        fontFamily: font.fontFamily,
+                        fontSize: `${size}px`,
+                        fontWeight: safeWeight,
+                        letterSpacing: `${customLetterSpacing}px`,
+                        lineHeight: 1.2,
+                        fontStyle: customItalic ? 'italic' : 'normal',
+                        color: textColor,
+                      }}
+                    >
+                      {currentPreviewText || 'The quick brown fox jumps over the lazy dog'}
+                    </p>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div
                 style={{
@@ -352,6 +378,9 @@ export function FontDetailPanel() {
                 {currentPreviewText}
               </div>
             )}
+            <p className="mt-3 text-[9px] font-mono text-text-subtle">
+              {(previewMode === 'custom' ? customPreviewText : currentPreviewText).length} chars · {safeWeight} weight · {customSize}px
+            </p>
           </div>
 
           {/* Customization controls */}
@@ -370,6 +399,7 @@ export function FontDetailPanel() {
                   <button
                     key={b}
                     onClick={() => setCustomBackground(b)}
+                    aria-pressed={customBackground === b}
                     className={`text-[10px] font-mono px-2 py-0.5 rounded border transition-none ${
                       customBackground === b ? 'border-accent/40 text-accent bg-accent/10' : 'border-border text-text-muted'
                     }`}
@@ -436,7 +466,7 @@ export function FontDetailPanel() {
             )}
           </div>
 
-          {/* Available weights — clickable buttons (NOT a broken range slider) */}
+          {/* Available weights — buttons + fluid slider for variable fonts */}
           <div className="px-6 py-5 border-b border-border">
             <h3 className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-3">
               Weights <span className="normal-case text-text-subtle">({font.weights.length})</span>
@@ -446,6 +476,7 @@ export function FontDetailPanel() {
                 <button
                   key={w}
                   onClick={() => setCustomWeight(w)}
+                  aria-pressed={safeWeight === w}
                   className={`text-[11px] font-mono px-3 py-1.5 rounded border transition-none ${
                     safeWeight === w
                       ? 'border-accent/40 text-accent bg-accent/10'
@@ -457,6 +488,11 @@ export function FontDetailPanel() {
                 </button>
               ))}
             </div>
+            {font.isVariable && (
+              <div className="mt-3">
+                <SliderRow label="Variable wght" id="panel-variable-weight" value={safeWeight} min={100} max={900} step={1} onChange={setCustomWeight} />
+              </div>
+            )}
             {/* Variable axes */}
             {font.variableAxes.length > 0 && (
               <p className="text-[10px] font-mono text-text-muted mt-2.5">
@@ -536,7 +572,7 @@ export function FontDetailPanel() {
 
           {/* Suggested pairings */}
           {suggestedPairings.length > 0 && (
-            <div className="px-6 py-5">
+            <div className="px-6 py-5 border-b border-border">
               <h3 className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-4">Pairs Well With</h3>
               <div className="space-y-2">
                 {suggestedPairings.map((paired) => (
@@ -562,6 +598,32 @@ export function FontDetailPanel() {
                       </button>
                     </div>
                   </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Similar fonts */}
+          {similarFonts.length > 0 && (
+            <div className="px-6 py-5">
+              <h3 className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-4">Similar Fonts</h3>
+              <div className="grid grid-cols-1 gap-2">
+                {similarFonts.map((similar) => (
+                  <button
+                    key={similar.slug}
+                    onClick={() => setSelectedFont(similar)}
+                    className="flex items-center justify-between gap-3 rounded-card border border-border bg-surface px-3 py-2.5 text-left hover:border-border-hover transition-colors"
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-[13px] text-text-primary" style={{ fontFamily: similar.fontFamily }}>
+                        {similar.name}
+                      </span>
+                      <span className="block text-[9px] font-mono text-text-subtle mt-0.5">
+                        {similar.category} · {similar.moods.slice(0, 2).join(', ')}
+                      </span>
+                    </span>
+                    <span className="flex-shrink-0 text-[10px] font-mono text-text-muted">Open →</span>
+                  </button>
                 ))}
               </div>
             </div>

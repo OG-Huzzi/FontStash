@@ -3,6 +3,28 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { Font, SortOption, PreviewMode, PreviewBackground, AddToCompareResult } from '@/lib/types';
+import { FAVORITE_KEYS } from '@/lib/storage';
+
+function readFavoriteSlugs(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(FAVORITE_KEYS.fonts);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFavoriteSlugs(slugs: string[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(FAVORITE_KEYS.fonts, JSON.stringify(slugs));
+    window.dispatchEvent(new CustomEvent('fontstash-storage', { detail: { key: FAVORITE_KEYS.fonts } }));
+  } catch {
+    // Quota / private mode — store state still updates in memory.
+  }
+}
 
 interface FontStore {
   // Preview
@@ -43,11 +65,14 @@ interface FontStore {
   headingFont: Font | null;
   bodyFont: Font | null;
 
-  // Favorites (persisted)
+  // Favorites (persisted, single source of truth: FAVORITE_KEYS.fonts)
   favorites: string[]; // font slugs
 
-  // Recently viewed (persisted, max 10)
+  // Recently viewed (persisted, max 12)
   recentlyViewed: string[]; // font slugs
+
+  // Filtered-list navigation for the detail panel arrows (transient)
+  navigationSlugs: string[];
 
   // Performance (not persisted)
   loadedFonts: Set<string>;
@@ -101,6 +126,9 @@ interface FontStore {
   // Actions — Recently viewed
   addRecentlyViewed: (slug: string) => void;
 
+  // Actions — Panel navigation
+  setNavigationSlugs: (slugs: string[]) => void;
+
   // Actions — Font loading
   markFontLoaded: (fontSlug: string) => void;
   isFontLoaded: (fontSlug: string) => boolean;
@@ -146,8 +174,13 @@ export const useFontStore = create<FontStore>()(
       bodyFont: null,
 
       // Favorites & recently viewed (persisted)
-      favorites: [],
+      // Initialize favorites from the same key the UI hooks use so there is
+      // exactly one source of truth (fontstash_favorites_fonts).
+      favorites: readFavoriteSlugs(),
       recentlyViewed: [],
+
+      // Filtered-list navigation (set by FontGrid on every filter change)
+      navigationSlugs: [],
 
       // Performance (not persisted — rebuilt per session)
       loadedFonts: new Set(),
@@ -240,13 +273,15 @@ export const useFontStore = create<FontStore>()(
       setHeadingFont: (font) => set({ headingFont: font }),
       setBodyFont: (font) => set({ bodyFont: font }),
 
-      // Favorites actions
+      // Favorites actions (single source of truth — mirrors FAVORITE_KEYS.fonts)
       toggleFavorite: (slug) =>
-        set((state) => ({
-          favorites: state.favorites.includes(slug)
+        set((state) => {
+          const next = state.favorites.includes(slug)
             ? state.favorites.filter((s) => s !== slug)
-            : [...state.favorites, slug],
-        })),
+            : [...state.favorites, slug];
+          writeFavoriteSlugs(next);
+          return { favorites: next };
+        }),
       isFavorite: (slug) => get().favorites.includes(slug),
 
       // Recently viewed
@@ -255,6 +290,9 @@ export const useFontStore = create<FontStore>()(
           const filtered = state.recentlyViewed.filter((s) => s !== slug);
           return { recentlyViewed: [slug, ...filtered].slice(0, 12) };
         }),
+
+      // Panel navigation list (filtered slugs for ←/→)
+      setNavigationSlugs: (slugs) => set({ navigationSlugs: slugs }),
 
       // Font loading
       markFontLoaded: (fontSlug) =>
@@ -277,6 +315,41 @@ export const useFontStore = create<FontStore>()(
         previewBackground: state.previewBackground,
         sortBy: state.sortBy,
       }),
+      // Merge any favorites saved via useLocalStorageList (same key) so
+      // pre-existing divergent copies converge on the union, not stale data.
+      onRehydrateStorage: () => (rehydrated) => {
+        if (!rehydrated) return;
+        try {
+          const fromKey = readFavoriteSlugs();
+          const merged = Array.from(new Set([...(rehydrated.favorites ?? []), ...fromKey]));
+          if (merged.length !== (rehydrated.favorites ?? []).length) {
+            useFontStore.setState({ favorites: merged });
+            writeFavoriteSlugs(merged);
+          }
+        } catch {
+          // ignore
+        }
+      },
     }
   )
 );
+
+// Keep store favorites in sync when UI toggles via useLocalStorageList
+// (FontCard / panels use the hook, not the store action).
+if (typeof window !== 'undefined') {
+  const syncFromKey = () => {
+    try {
+      const fromKey = readFavoriteSlugs();
+      const current = useFontStore.getState().favorites;
+      if (fromKey.length === current.length && fromKey.every((s) => current.includes(s))) return;
+      useFontStore.setState({ favorites: fromKey });
+    } catch {
+      // ignore
+    }
+  };
+  window.addEventListener('fontstash-storage', (e) => {
+    const detail = (e as CustomEvent)?.detail as { key?: string } | undefined;
+    if (!detail || detail.key === FAVORITE_KEYS.fonts) syncFromKey();
+  });
+  window.addEventListener('storage', syncFromKey);
+}

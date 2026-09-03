@@ -16,8 +16,8 @@ module.exports = {
         'border-hover': '#2A2A2A',
         accent: '#E8FF57',
         'text-primary': '#F2F2F2',
-        'text-muted': '#666666',
-        'text-subtle': '#333333',
+        'text-muted': '#8C8C8C',
+        'text-subtle': '#6E6E6E',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

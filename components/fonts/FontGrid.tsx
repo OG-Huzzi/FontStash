@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useMemo, useEffect, useRef, useState, useCallback } from 'react';
+import React, { useMemo, useEffect, useRef, useState, useCallback, useDeferredValue } from 'react';
 import { useFontStore } from '@/store/useFontStore';
 import { allFonts, searchFonts, filterFonts, sortFonts, getFontBySlug } from '@/lib/fonts';
 import { FAVORITE_KEYS, useLocalStorageList } from '@/lib/storage';
+import { useToast } from '@/components/ui/Toast';
 import { FontCard } from './FontCard';
 
 const INITIAL_RENDER_COUNT = 48;
@@ -72,18 +73,24 @@ export function FontGrid() {
     activeSources,
     variableOnly,
     sortBy,
+    setNavigationSlugs,
   } = useFontStore();
   const { items: favorites } = useLocalStorageList(FAVORITE_KEYS.fonts);
+  const { showToast } = useToast();
 
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [shuffleKey, setShuffleKey] = useState(0);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(getResponsiveColumnCount);
   const [virtualRange, setVirtualRange] = useState({ start: 0, end: INITIAL_RENDER_COUNT });
 
+  // Defer expensive Fuse + filter work so typing stays responsive.
+  const deferredQuery = useDeferredValue(searchQuery);
+
   // Compute filtered + sorted fonts
   const processedFonts = useMemo(() => {
-    let fonts = searchQuery.trim() ? searchFonts(searchQuery) : allFonts;
+    let fonts = deferredQuery.trim() ? searchFonts(deferredQuery) : allFonts;
     fonts = filterFonts(fonts, {
       categories: activeCategories,
       moods: activeMoods,
@@ -96,13 +103,43 @@ export function FontGrid() {
     if (showFavoritesOnly) {
       fonts = fonts.filter((f) => favorites.includes(f.slug));
     }
+    if (shuffleKey > 0) {
+      // Deterministic shuffle per key so scroll position stays stable.
+      const arr = [...fonts];
+      let seed = shuffleKey * 2654435761;
+      const rand = () => {
+        seed ^= seed << 13;
+        seed ^= seed >>> 17;
+        seed ^= seed << 5;
+        return ((seed >>> 0) % 1000) / 1000;
+      };
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      fonts = arr;
+    }
     return fonts;
-  }, [searchQuery, activeCategories, activeMoods, activeWeights, activeLanguages, activeSources, variableOnly, sortBy, showFavoritesOnly, favorites]);
+  }, [deferredQuery, activeCategories, activeMoods, activeWeights, activeLanguages, activeSources, variableOnly, sortBy, showFavoritesOnly, favorites, shuffleKey]);
+
+  // Expose filtered order to the detail panel for ←/→ navigation.
+  useEffect(() => {
+    setNavigationSlugs(processedFonts.map((f) => f.slug));
+  }, [processedFonts, setNavigationSlugs]);
+
+  const handleCopyLink = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      showToast('Search link copied — share it anywhere');
+    } catch {
+      showToast('Could not copy link');
+    }
+  }, [showToast]);
 
   // Reset mounted rows when filters change
   useEffect(() => {
     setVirtualRange({ start: 0, end: Math.min(INITIAL_RENDER_COUNT, processedFonts.length) });
-  }, [processedFonts.length, searchQuery, activeCategories, activeMoods, activeWeights, activeLanguages, activeSources, variableOnly, sortBy, showFavoritesOnly]);
+  }, [processedFonts.length, deferredQuery, activeCategories, activeMoods, activeWeights, activeLanguages, activeSources, variableOnly, sortBy, showFavoritesOnly, shuffleKey]);
 
   useEffect(() => {
     const updateColumnCount = () => setColumnCount(getResponsiveColumnCount());
@@ -165,7 +202,7 @@ export function FontGrid() {
   return (
     <div ref={scrollRootRef} className="h-full overflow-y-scroll font-grid-scrollbar px-4 sm:px-6 py-6">
       {/* Recently viewed — only on initial unfiltered state */}
-      {!searchQuery && activeCategories.length === 0 && activeMoods.length === 0 && !showFavoritesOnly && (
+      {!deferredQuery && activeCategories.length === 0 && activeMoods.length === 0 && !showFavoritesOnly && (
         <RecentlyViewedStrip />
       )}
 
@@ -175,9 +212,33 @@ export function FontGrid() {
           {processedFonts.length.toLocaleString()} fonts
         </span>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShuffleKey((k) => k + 1)}
+            className="flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border border-border text-text-muted hover:border-border-hover hover:text-text-primary transition-colors"
+            title="Shuffle results"
+            aria-label="Shuffle results"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16 3h5v5" />
+              <path d="M4 20 21 3" />
+              <path d="M21 16v5h-5" />
+              <path d="m15 15 6 6" />
+              <path d="M4 4l5 5" />
+            </svg>
+            Shuffle
+          </button>
+          <button
+            onClick={handleCopyLink}
+            className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border border-border text-text-muted hover:border-border-hover hover:text-text-primary transition-colors"
+            title="Copy shareable link for this search"
+            aria-label="Copy shareable link"
+          >
+            Share
+          </button>
           {favorites.length > 0 && (
             <button
               onClick={() => setShowFavoritesOnly((v) => !v)}
+              aria-pressed={showFavoritesOnly}
               className={`flex items-center gap-1.5 text-[10px] font-mono px-2.5 py-1 rounded border transition-colors ${
                 showFavoritesOnly
                   ? 'border-accent/40 text-accent bg-accent/10'
@@ -205,7 +266,7 @@ export function FontGrid() {
           <p className="text-text-muted text-sm mb-2">
             {showFavoritesOnly
               ? 'No saved fonts yet'
-              : searchQuery
+              : deferredQuery
               ? 'No fonts match your search'
               : 'No fonts match these filters'}
           </p>

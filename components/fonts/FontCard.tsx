@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useFontStore } from '@/store/useFontStore';
 import { useToast } from '@/components/ui/Toast';
 import { FAVORITE_KEYS, useLocalStorageList } from '@/lib/storage';
+import { ensureFontStylesheet } from '@/lib/fontLoader';
 import type { Font, PreviewBackground } from '@/lib/types';
 
 interface FontCardProps {
@@ -13,38 +14,8 @@ interface FontCardProps {
   previewBackground: PreviewBackground;
 }
 
-function getPrimaryFontFamily(font: Font) {
-  return font.fontFamily.split(',')[0]?.trim() || `'${font.name}'`;
-}
-
 function loadFont(font: Font, weight: number): Promise<void> {
-  if (typeof document === 'undefined') return Promise.resolve();
-  const linkId = `font-${font.slug}`;
-  const existingLink = document.getElementById(linkId) as HTMLLinkElement | null;
-
-  const loadFace = async () => {
-    try {
-      await document.fonts?.load(`${weight} 32px ${getPrimaryFontFamily(font)}`);
-    } catch {
-      // If a provider misses a specific face, still render with the fallback stack.
-    }
-  };
-
-  if (existingLink) return loadFace();
-
-  const link = document.createElement('link');
-  link.id = linkId;
-  link.rel = 'stylesheet';
-  link.href = font.importUrl;
-
-  return new Promise((resolve) => {
-    link.onload = async () => {
-      await loadFace();
-      resolve();
-    };
-    link.onerror = () => resolve();
-    document.head.appendChild(link);
-  });
+  return ensureFontStylesheet(font, weight);
 }
 
 const SOURCE_LABELS: Record<string, string> = {

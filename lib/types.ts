@@ -22,7 +22,7 @@ export interface Font {
 }
 
 export type SortOption = 'popular' | 'newest' | 'alpha-asc' | 'alpha-desc';
-export type PreviewMode = 'sentence' | 'paragraph' | 'alphabet' | 'numbers' | 'custom';
+export type PreviewMode = 'sentence' | 'paragraph' | 'alphabet' | 'numbers' | 'custom' | 'waterfall';
 export type PreviewBackground = 'dark' | 'light' | 'custom';
 
 // Action result types

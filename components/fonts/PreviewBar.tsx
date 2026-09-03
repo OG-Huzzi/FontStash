@@ -9,7 +9,7 @@ export function PreviewBar({ onOpenMobileSidebar }: { onOpenMobileSidebar?: () =
   const [isFocused, setIsFocused] = useState(false);
 
   return (
-    <div className="z-40 flex-shrink-0 bg-background/95 backdrop-blur-sm border-b border-border px-4 py-2.5 flex items-center gap-3">
+    <div className="z-40 flex-shrink-0 bg-background/95 backdrop-blur-sm border-b border-border px-4 py-2.5 flex items-center gap-3" role="toolbar" aria-label="Font preview controls">
       {/* Mobile filter trigger */}
       {onOpenMobileSidebar && (
         <button
@@ -79,9 +79,10 @@ export function PreviewBar({ onOpenMobileSidebar }: { onOpenMobileSidebar?: () =
       <div className="w-px h-4 bg-border flex-shrink-0 hidden sm:block" />
 
       {/* Background toggle */}
-      <div className="flex items-center gap-1 flex-shrink-0">
+      <div className="flex items-center gap-1 flex-shrink-0" role="group" aria-label="Preview background">
         <button
           onClick={() => setPreviewBackground('dark')}
+          aria-pressed={previewBackground === 'dark'}
           className={`text-[10px] font-mono px-2 py-1 rounded transition-none border ${
             previewBackground === 'dark'
               ? 'text-accent border-accent/40 bg-accent/10'
@@ -94,6 +95,7 @@ export function PreviewBar({ onOpenMobileSidebar }: { onOpenMobileSidebar?: () =
         </button>
         <button
           onClick={() => setPreviewBackground('light')}
+          aria-pressed={previewBackground === 'light'}
           className={`text-[10px] font-mono px-2 py-1 rounded transition-none border ${
             previewBackground === 'light'
               ? 'text-accent border-accent/40 bg-accent/10'

@@ -8,21 +8,27 @@ import { FontGrid } from '@/components/fonts/FontGrid';
 import { FontDetailPanel } from '@/components/fonts/FontDetailPanel';
 import { getFontBySlug } from '@/lib/fonts';
 import { useFontStore } from '@/store/useFontStore';
+import { useFilterParamsSync } from '@/lib/useFilterParams';
 
 export default function HomePageClient() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const { openPanel } = useFontStore();
+  useFilterParamsSync(true);
 
   useEffect(() => {
-    const slug = new URLSearchParams(window.location.search).get('font');
+    const params = new URLSearchParams(window.location.search);
+    const slug = params.get('font');
     if (!slug) return;
     const font = getFontBySlug(slug);
     if (font) openPanel(font);
-    window.history.replaceState(null, '', '/');
+    // Remove only `font`, preserve shareable filter params (?q=&cat=...).
+    params.delete('font');
+    const next = params.toString();
+    window.history.replaceState(null, '', next ? `/?${next}` : '/');
   }, [openPanel]);
 
   return (
-    <main className="h-screen bg-background overflow-hidden flex flex-col">
+    <main id="main-content" className="h-screen bg-background overflow-hidden flex flex-col">
       {/* Fixed Navbar */}
       <Navbar onOpenMobileSidebar={() => setMobileSidebarOpen(true)} />
 

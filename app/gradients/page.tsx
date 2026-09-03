@@ -34,8 +34,47 @@ export default function GradientsPage() {
     showToast('Gradient CSS copied');
   };
 
+  const downloadPng = () => {
+    if (!selected) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1200;
+      canvas.height = 630;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        showToast('Could not export PNG');
+        return;
+      }
+      if (type === 'radial') {
+        const grad = ctx.createRadialGradient(600, 315, 50, 600, 315, 700);
+        selected.colors.forEach((color, i) => {
+          grad.addColorStop(i / Math.max(selected.colors.length - 1, 1), color);
+        });
+        ctx.fillStyle = grad;
+      } else {
+        const rad = ((angle - 90) * Math.PI) / 180;
+        const x = Math.cos(rad);
+        const y = Math.sin(rad);
+        const grad = ctx.createLinearGradient(600 - x * 600, 315 - y * 315, 600 + x * 600, 315 + y * 315);
+        selected.colors.forEach((color, i) => {
+          grad.addColorStop(i / Math.max(selected.colors.length - 1, 1), color);
+        });
+        ctx.fillStyle = grad;
+      }
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selected.id}.png`;
+      a.click();
+      showToast('Gradient PNG downloaded');
+    } catch {
+      showToast('Could not export PNG');
+    }
+  };
+
   return (
-    <main className="min-h-screen bg-background">
+    <main id="main-content" className="min-h-screen bg-background">
       <Navbar />
       <div className="pt-14 px-4 sm:px-6 py-6">
         <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -85,6 +124,9 @@ export default function GradientsPage() {
               </label>
               <button onClick={copyCss} className="w-full text-[11px] font-mono py-2 px-3 rounded-input border border-accent/40 text-accent bg-accent/10">
                 Copy CSS
+              </button>
+              <button onClick={downloadPng} className="w-full text-[11px] font-mono py-2 px-3 rounded-input border border-border text-text-muted bg-surface hover:text-text-primary hover:border-border-hover">
+                ↓ Download PNG
               </button>
               <pre className="text-[10px] font-mono text-text-muted whitespace-pre-wrap border border-border rounded-card p-2 bg-background">{selectedCss}</pre>
             </div>

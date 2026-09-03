@@ -3,7 +3,8 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Navbar } from '@/components/layout/Navbar';
 import { useFontStore } from '@/store/useFontStore';
-import { allFonts } from '@/lib/fonts';
+import { allFonts, searchFontsInList } from '@/lib/fonts';
+import { ensureFontStylesheet } from '@/lib/fontLoader';
 import { useToast } from '@/components/ui/Toast';
 import type { Font } from '@/lib/types';
 
@@ -13,14 +14,7 @@ const WEIGHT_NAMES: Record<number, string> = {
 };
 
 function loadFont(font: Font) {
-  if (typeof document === 'undefined') return;
-  const linkId = `font-compare-${font.slug}`;
-  if (document.getElementById(linkId)) return;
-  const link = document.createElement('link');
-  link.id = linkId;
-  link.rel = 'stylesheet';
-  link.href = font.importUrl;
-  document.head.appendChild(link);
+  void ensureFontStylesheet(font);
 }
 
 /* ─── Add Font Modal ─── */
@@ -36,9 +30,7 @@ function AddFontModal({
   const [query, setQuery] = useState('');
 
   const results = useMemo(() => {
-    const base = query
-      ? allFonts.filter((f) => f.name.toLowerCase().includes(query.toLowerCase()))
-      : allFonts;
+    const base = query.trim() ? searchFontsInList(allFonts, query, 80) : allFonts.slice(0, 40);
     return base.filter((f) => !existingSlugs.includes(f.slug)).slice(0, 40);
   }, [query, existingSlugs]);
 
@@ -196,6 +188,31 @@ export default function ComparePage() {
   const [lineHeight, setLineHeight] = useState(1.3);
   const [background, setBackground] = useState<'dark' | 'light'>('dark');
 
+  // Hydrate from shareable ?fonts=a,b,c (frontend-only, no backend).
+  useEffect(() => {
+    try {
+      const slugs = new URLSearchParams(window.location.search).get('fonts');
+      if (!slugs) return;
+      if (useFontStore.getState().comparedFonts.length > 0) return;
+      slugs.split(',').filter(Boolean).slice(0, 4).forEach((slug) => {
+        const font = allFonts.find((f) => f.slug === slug);
+        if (font) useFontStore.getState().addToCompare(font);
+      });
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep URL in sync so comparisons are shareable.
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (comparedFonts.length > 0) params.set('fonts', comparedFonts.map((f) => f.slug).join(','));
+      else params.delete('fonts');
+      const next = params.toString();
+      window.history.replaceState(null, '', next ? `${window.location.pathname}?${next}` : window.location.pathname);
+    } catch { /* ignore */ }
+  }, [comparedFonts]);
+
   // Load fonts that are already in compare (e.g. from store persistence or card buttons)
   useEffect(() => {
     comparedFonts.forEach(loadFont);
@@ -213,18 +230,27 @@ export default function ComparePage() {
   const handleExport = useCallback(async () => {
     const text = comparedFonts
       .map((f) =>
-        `${f.name}\nCategory: ${f.category}\nWeights: ${f.weights.join(', ')}\nVariable: ${f.isVariable}\nSource: ${f.source}\nCSS: font-family: ${f.fontFamily};\n`
+        `${f.name}\nCategory: ${f.category}\nWeights: ${f.weights.join(', ')}\nVariable: ${f.isVariable ? `yes (${f.variableAxes.join(', ')})` : 'no'}\nSource: ${f.source}\nImport: ${f.importUrl}\nCSS: font-family: ${f.fontFamily};\n`
       )
       .join('\n---\n');
     await navigator.clipboard.writeText(text);
     showToast('Comparison copied to clipboard');
   }, [comparedFonts, showToast]);
 
+  const handleShare = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      showToast('Compare link copied — share it anywhere');
+    } catch {
+      showToast('Could not copy link');
+    }
+  }, [showToast]);
+
   const controlClass = 'flex items-center gap-2';
   const labelClass = 'text-[10px] font-mono text-text-muted flex-shrink-0';
 
   return (
-    <main className="min-h-screen bg-background flex flex-col">
+    <main id="main-content" className="min-h-screen bg-background flex flex-col">
       <Navbar />
 
       <div className="pt-14 flex flex-col flex-1">
@@ -237,6 +263,13 @@ export default function ComparePage() {
           <div className="flex items-center gap-2">
             {comparedFonts.length > 0 && (
               <>
+                <button
+                  onClick={handleShare}
+                  className="text-[11px] font-mono py-2 px-3 rounded-input border border-border text-text-muted bg-surface hover:border-border-hover transition-colors"
+                  id="compare-share"
+                >
+                  Share
+                </button>
                 <button
                   onClick={handleExport}
                   className="text-[11px] font-mono py-2 px-3 rounded-input border border-border text-text-muted bg-surface hover:border-border-hover transition-colors"
@@ -320,11 +353,12 @@ export default function ComparePage() {
           <div className="w-px h-4 bg-border" />
 
           {/* Background */}
-          <div className="flex gap-1">
+          <div className="flex gap-1" role="group" aria-label="Compare background">
             {(['dark', 'light'] as const).map((b) => (
               <button
                 key={b}
                 onClick={() => setBackground(b)}
+                aria-pressed={background === b}
                 className={`text-[10px] font-mono px-2 py-1 rounded border transition-none ${
                   background === b ? 'border-accent/40 text-accent bg-accent/10' : 'border-border text-text-muted'
                 }`}

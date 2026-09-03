@@ -4,19 +4,14 @@ import React, { useState, useEffect, useMemo, useCallback, useRef, Suspense } fr
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Navbar } from '@/components/layout/Navbar';
 import { useToast } from '@/components/ui/Toast';
-import { allFonts, curatedPairings, getPairingScore } from '@/lib/fonts';
+import { allFonts, curatedPairings, getPairingScore, searchFontsInList } from '@/lib/fonts';
+import { ensureFontStylesheet } from '@/lib/fontLoader';
+import { useFontStore } from '@/store/useFontStore';
 import type { Font } from '@/lib/types';
 
 
 function loadFont(font: Font) {
-  if (typeof document === 'undefined') return;
-  const linkId = `font-pairs-${font.slug}`;
-  if (document.getElementById(linkId)) return;
-  const link = document.createElement('link');
-  link.id = linkId;
-  link.rel = 'stylesheet';
-  link.href = font.importUrl;
-  document.head.appendChild(link);
+  void ensureFontStylesheet(font);
 }
 
 const MOCKUP_TYPES = ['Landing', 'Article', 'Dashboard', 'Card'] as const;
@@ -24,21 +19,21 @@ type MockupType = typeof MOCKUP_TYPES[number];
 
 /* ─── Mockup components ─── */
 
-function LandingMockup({ hFont, bFont }: { hFont: Font | null; bFont: Font | null }) {
+function LandingMockup({ hFont, bFont, headingText, bodyText, palette }: { hFont: Font | null; bFont: Font | null; headingText?: string; bodyText?: string; palette?: string[] | null }) {
   return (
-    <div className="p-6 bg-surface rounded-card border border-border">
+    <div className="p-6 bg-surface rounded-card border border-border" style={palette?.[0] ? { borderColor: `${palette[0]}55` } : undefined}>
       <p className="text-[10px] font-mono text-accent mb-3 uppercase tracking-widest">→ Now in beta</p>
       <h2
         className="text-3xl font-bold text-text-primary leading-tight mb-3"
-        style={{ fontFamily: hFont?.fontFamily || 'inherit' }}
+        style={{ fontFamily: hFont?.fontFamily || 'inherit', color: palette?.[4] ? palette[4] : undefined }}
       >
-        Design tools for<br />modern creators
+        {headingText || <>Design tools for<br />modern creators</>}
       </h2>
       <p
         className="text-sm text-text-muted leading-relaxed mb-5"
         style={{ fontFamily: bFont?.fontFamily || 'inherit' }}
       >
-        Build beautiful products faster with our design system. Trusted by 10,000+ designers worldwide.
+        {bodyText || 'Build beautiful products faster with our design system. Trusted by 10,000+ designers worldwide.'}
       </p>
       <div className="flex gap-2">
         <div className="px-4 py-2 bg-accent rounded text-background text-xs font-semibold" style={{ fontFamily: bFont?.fontFamily || 'inherit' }}>
@@ -144,14 +139,7 @@ function FontPicker({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q
-      ? allFonts.filter((f) => (
-          f.name.toLowerCase().includes(q) ||
-          f.category.toLowerCase().includes(q) ||
-          f.designer.toLowerCase().includes(q)
-        ))
-      : allFonts;
+    return searchFontsInList(allFonts, query, 40);
   }, [query]);
 
   // Close on click outside
@@ -238,24 +226,46 @@ function PairsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { showToast } = useToast();
+  const storeHeading = useFontStore((s) => s.headingFont);
+  const storeBody = useFontStore((s) => s.bodyFont);
 
   const [headingFont, setHeadingFontState] = useState<Font | null>(null);
   const [bodyFont, setBodyFontState] = useState<Font | null>(null);
   const [mockupType, setMockupType] = useState<MockupType>('Landing');
   const [shareCopied, setShareCopied] = useState(false);
+  const [visiblePairs, setVisiblePairs] = useState(60);
+  const [activePalette, setActivePalette] = useState<string[] | null>(null);
+  const [headingText, setHeadingText] = useState('Design tools for modern creators');
+  const [bodyText, setBodyText] = useState('Build beautiful products faster with our design system. Trusted by 10,000+ designers worldwide.');
 
-  // Load fonts from URL params on mount
+  // Load fonts from URL params on mount (fall back to detail-panel store selection)
   useEffect(() => {
     const h = searchParams.get('h');
     const b = searchParams.get('b');
     if (h) {
       const f = allFonts.find((font) => font.slug === h);
       if (f) { setHeadingFontState(f); loadFont(f); }
+    } else if (storeHeading) {
+      setHeadingFontState(storeHeading);
+      loadFont(storeHeading);
     }
     if (b) {
       const f = allFonts.find((font) => font.slug === b);
       if (f) { setBodyFontState(f); loadFont(f); }
+    } else if (storeBody) {
+      setBodyFontState(storeBody);
+      loadFont(storeBody);
     }
+    try {
+      const raw = window.localStorage.getItem('fontstash_active_palette');
+      if (raw) {
+        const colors = JSON.parse(raw) as unknown;
+        if (Array.isArray(colors) && colors.every((c) => typeof c === 'string')) {
+          setActivePalette(colors as string[]);
+        }
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
   const setHeadingFont = useCallback(
@@ -299,10 +309,11 @@ function PairsPageContent() {
   }, [headingFont, bodyFont, showToast]);
 
   const handleCopyPrompt = useCallback(async () => {
-    const prompt = `Create typography for a ${mockupType.toLowerCase()} mockup using this font pairing.\n\nHeading font: ${headingFont?.name ?? 'Select a heading font'}\n- font-family: ${headingFont?.fontFamily ?? 'inherit'}\n- suggested weight: 700\n- import: ${headingFont?.importUrl ?? 'choose after selecting'}\n\nBody font: ${bodyFont?.name ?? 'Select a body font'}\n- font-family: ${bodyFont?.fontFamily ?? 'inherit'}\n- suggested weight: 400\n- line-height: 1.6\n- import: ${bodyFont?.importUrl ?? 'choose after selecting'}\n\nUse the heading for primary titles and the body font for paragraphs, metadata, and controls. Keep the composition readable, modern, and suitable for designers reviewing font pairings.`;
+    const paletteLine = activePalette ? `\n- palette: ${activePalette.join(', ')}` : '';
+    const prompt = `Create typography for a ${mockupType.toLowerCase()} mockup using this font pairing.\n\nHeading font: ${headingFont?.name ?? 'Select a heading font'}\n- font-family: ${headingFont?.fontFamily ?? 'inherit'}\n- suggested weight: 700\n- import: ${headingFont?.importUrl ?? 'choose after selecting'}\n- sample heading: "${headingText}"\n\nBody font: ${bodyFont?.name ?? 'Select a body font'}\n- font-family: ${bodyFont?.fontFamily ?? 'inherit'}\n- suggested weight: 400\n- line-height: 1.6\n- import: ${bodyFont?.importUrl ?? 'choose after selecting'}\n- sample body: "${bodyText}"${paletteLine}\n\nUse the heading for primary titles and the body font for paragraphs, metadata, and controls. Keep the composition readable, modern, and suitable for designers reviewing font pairings.`;
     await navigator.clipboard.writeText(prompt);
     showToast('Prompt copied - paste into Cursor, v0, or Lovable');
-  }, [headingFont, bodyFont, mockupType, showToast]);
+  }, [headingFont, bodyFont, mockupType, headingText, bodyText, activePalette, showToast]);
 
   const handlePickCuratedPair = useCallback(() => {
     const pair = curatedPairings[Math.floor(Math.random() * curatedPairings.length)];
@@ -314,7 +325,7 @@ function PairsPageContent() {
   }, [router]);
 
   return (
-    <main className="min-h-screen bg-background">
+    <main id="main-content" className="min-h-screen bg-background">
       <Navbar />
       <div className="pt-14">
         {/* Page header */}
@@ -386,10 +397,12 @@ function PairsPageContent() {
           {/* Right column */}
           <div className="flex-1 p-5 overflow-hidden">
             {/* Mockup tabs */}
-            <div className="flex items-center gap-1.5 mb-5">
+            <div className="flex items-center gap-1.5 mb-5" role="tablist" aria-label="Mockup types">
               {MOCKUP_TYPES.map((type) => (
                 <button
                   key={type}
+                  role="tab"
+                  aria-selected={mockupType === type}
                   onClick={() => setMockupType(type)}
                   className={`text-[11px] font-mono px-3 py-1.5 rounded border transition-none ${
                     mockupType === type
@@ -403,9 +416,41 @@ function PairsPageContent() {
               ))}
             </div>
 
+            {activePalette && (
+              <div className="mb-4 flex items-center gap-3 rounded-card border border-border bg-surface p-3">
+                <div className="flex flex-1 gap-1">
+                  {activePalette.map((color) => (
+                    <span key={color} className="h-6 flex-1 rounded" style={{ backgroundColor: color }} title={color} />
+                  ))}
+                </div>
+                <span className="text-[10px] font-mono text-text-muted">Palette from Palettes lab</span>
+                <button onClick={() => { setActivePalette(null); try { window.localStorage.removeItem('fontstash_active_palette'); } catch { /* ignore */ } }} className="text-[10px] font-mono text-text-subtle hover:text-text-primary" aria-label="Clear palette">
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Editable mockup copy */}
+            <div className="mb-4 grid gap-2 sm:grid-cols-2">
+              <input
+                value={headingText}
+                onChange={(e) => setHeadingText(e.target.value.slice(0, 120))}
+                placeholder="Heading text…"
+                aria-label="Mockup heading text"
+                className="rounded-input border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-border-hover focus:outline-none"
+              />
+              <input
+                value={bodyText}
+                onChange={(e) => setBodyText(e.target.value.slice(0, 200))}
+                placeholder="Body text…"
+                aria-label="Mockup body text"
+                className="rounded-input border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-subtle focus:border-border-hover focus:outline-none"
+              />
+            </div>
+
             {/* Mockup preview */}
             <div className="mb-8 animate-fade-in" key={mockupType}>
-              {mockupType === 'Landing'   && <LandingMockup hFont={headingFont} bFont={bodyFont} />}
+              {mockupType === 'Landing'   && <LandingMockup hFont={headingFont} bFont={bodyFont} headingText={headingText} bodyText={bodyText} palette={activePalette} />}
               {mockupType === 'Article'   && <ArticleMockup hFont={headingFont} bFont={bodyFont} />}
               {mockupType === 'Dashboard' && <DashboardMockup hFont={headingFont} bFont={bodyFont} />}
               {mockupType === 'Card'      && <CardMockup hFont={headingFont} bFont={bodyFont} />}
@@ -424,11 +469,11 @@ function PairsPageContent() {
               <div className="flex items-center justify-between gap-3 mb-4">
                 <h2 className="text-[9px] font-mono text-text-muted uppercase tracking-widest">Curated Pairings</h2>
                 <span className="text-[10px] font-mono text-accent border border-accent/30 bg-accent/10 rounded px-2 py-1">
-                  {curatedPairings.length.toLocaleString()} usable pairs
+                  {curatedPairings.length.toLocaleString()} usable pairs · showing {Math.min(visiblePairs, curatedPairings.length)}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                {curatedPairings.map((pair) => {
+                {curatedPairings.slice(0, visiblePairs).map((pair) => {
                   const h = allFonts.find((f) => f.slug === pair.heading);
                   const b = allFonts.find((f) => f.slug === pair.body);
                   if (!h || !b) return null;
@@ -460,6 +505,14 @@ function PairsPageContent() {
                   );
                 })}
               </div>
+              {visiblePairs < curatedPairings.length && (
+                <button
+                  onClick={() => setVisiblePairs((v) => v + 60)}
+                  className="mt-4 w-full rounded-card border border-border bg-surface py-3 text-[11px] font-mono text-text-muted hover:text-text-primary hover:border-border-hover transition-colors"
+                >
+                  Load more pairings ({curatedPairings.length - visiblePairs} remaining)
+                </button>
+              )}
             </div>
           </div>
         </div>

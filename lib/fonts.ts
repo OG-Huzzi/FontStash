@@ -34,6 +34,15 @@ export function searchFonts(query: string): Font[] {
   return results.map((r) => r.item);
 }
 
+// Unified fuzzy filter for pickers (compare / pairs) so every surface ranks
+// the same way as the main Navbar search instead of plain `includes`.
+export function searchFontsInList(fonts: Font[], query: string, limit = 40): Font[] {
+  const q = query.trim();
+  if (!q) return fonts.slice(0, limit);
+  const fuse = new Fuse(fonts, fuseOptions);
+  return fuse.search(q).slice(0, limit).map((r) => r.item);
+}
+
 export function getFontBySlug(slug: string): Font | undefined {
   return allFonts.find((f) => f.slug === slug);
 }
@@ -408,22 +417,74 @@ function buildCuratedPairings(): CuratedPairing[] {
 // 500+ deterministic, rule-scored pairings. No random shuffling, no paid API.
 export const curatedPairings: CuratedPairing[] = buildCuratedPairings();
 
+export function getCuratedPairings(): CuratedPairing[] {
+  return curatedPairings;
+}
+
+function scoreCandidateForFont(font: Font, candidate: Font): number {
+  let score = candidate.popularity;
+  // Prefer complementary categories (same rules as getPairingScore).
+  const pairing = getPairingScore(font, candidate);
+  if (pairing.score === 'Complementary') score += 1200;
+  else if (pairing.score === 'Neutral') score += 300;
+  else score -= 800;
+  // Shared mood = cohesive; different mood with contrast = interesting.
+  const overlap = candidate.moods.filter((m) => font.moods.includes(m)).length;
+  score += overlap * 120;
+  if (candidate.weights.includes(400)) score += 150;
+  if (candidate.isVariable) score += 80;
+  if (candidate.source === font.source) score += 40;
+  return score;
+}
+
 export function getSuggestedPairings(font: Font): string[] {
-  // Find complementary fonts
   const isSerif = font.category === 'serif';
   const isSans = font.category === 'sans-serif';
   const isDisplay = font.category === 'display';
-  
-  let pairCategory: string;
-  if (isSerif) pairCategory = 'sans-serif';
-  else if (isSans) pairCategory = 'serif';
-  else if (isDisplay) pairCategory = 'sans-serif';
-  else pairCategory = 'sans-serif';
+
+  let pairCategories: string[];
+  if (isSerif) pairCategories = ['sans-serif', 'display'];
+  else if (isSans) pairCategories = ['serif', 'display', 'sans-serif'];
+  else if (isDisplay) pairCategories = ['sans-serif', 'serif'];
+  else pairCategories = ['sans-serif', 'serif'];
 
   const candidates = allFonts
-    .filter((f) => f.category === pairCategory && f.slug !== font.slug)
-    .slice(0, 20);
-  
-  // Return top 4
-  return candidates.slice(0, 4).map((f) => f.slug);
+    .filter((f) => f.slug !== font.slug && pairCategories.includes(f.category))
+    .filter((f) => f.languages.includes('latin'))
+    .slice(0, 400)
+    .map((f) => ({ slug: f.slug, score: scoreCandidateForFont(font, f) }))
+    .sort((a, b) => b.score - a.score);
+
+  // Diversify: avoid returning 4x the same category.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of candidates) {
+    const f = allFonts.find((x) => x.slug === c.slug);
+    const cat = f?.category ?? '';
+    if (seen.has(cat) && out.length >= 2) continue;
+    seen.add(cat);
+    out.push(c.slug);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+export function getSimilarFonts(font: Font, limit = 6): Font[] {
+  return allFonts
+    .filter((f) => f.slug !== font.slug)
+    .map((candidate) => {
+      let score = 0;
+      if (candidate.category === font.category) score += 500;
+      const overlap = candidate.moods.filter((m) => font.moods.includes(m)).length;
+      score += overlap * 200;
+      const sharedWeights = candidate.weights.filter((w) => font.weights.includes(w)).length;
+      score += sharedWeights * 20;
+      if (candidate.isVariable === font.isVariable) score += 60;
+      if (candidate.source === font.source) score += 20;
+      score += Math.min(candidate.popularity / 50, 100);
+      return { candidate, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((x) => x.candidate);
 }

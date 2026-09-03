@@ -29,7 +29,17 @@ function readJson<T>(key: string, fallback: T): T {
 
 function writeJson<T>(key: string, value: T) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(key, JSON.stringify(value));
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Quota exceeded or private mode — keep in-memory state, avoid crashing.
+    try {
+      window.dispatchEvent(new CustomEvent('fontstash-storage-quota', { detail: { key } }));
+    } catch {
+      // ignore
+    }
+    return;
+  }
   window.dispatchEvent(new CustomEvent('fontstash-storage', { detail: { key } }));
 }
 
@@ -80,17 +90,32 @@ export function useCollections() {
   }, []);
 
   const createCollection = useCallback((name: string) => {
-    const cleanName = name.trim();
-    if (!cleanName) return;
+    const cleanName = name.trim().slice(0, 48);
+    if (!cleanName) return null as string | null;
+    const duplicate = collections.some((c) => c.name.toLowerCase() === cleanName.toLowerCase());
+    if (duplicate) return null as string | null;
+    const id = `${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`;
     save([
       ...collections,
       {
-        id: `${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`,
+        id,
         name: cleanName,
         fontIds: [],
         createdAt: new Date().toISOString(),
       },
     ]);
+    return id as string | null;
+  }, [collections, save]);
+
+  const renameCollection = useCallback((id: string, name: string) => {
+    const cleanName = name.trim().slice(0, 48);
+    if (!cleanName) return false;
+    const duplicate = collections.some((c) => c.id !== id && c.name.toLowerCase() === cleanName.toLowerCase());
+    if (duplicate) return false;
+    save(collections.map((collection) => (
+      collection.id === id ? { ...collection, name: cleanName } : collection
+    )));
+    return true;
   }, [collections, save]);
 
   const deleteCollection = useCallback((id: string) => {
@@ -107,10 +132,26 @@ export function useCollections() {
     }));
   }, [collections, save]);
 
+  const importCollections = useCallback((input: FontCollection[]) => {
+    const clean = input
+      .filter((c) => c && typeof c.name === 'string' && Array.isArray(c.fontIds))
+      .map((c) => ({
+        id: typeof c.id === 'string' && c.id ? c.id : `imported-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        name: c.name.trim().slice(0, 48) || 'Imported',
+        fontIds: c.fontIds.filter((id) => typeof id === 'string').slice(0, 500),
+        createdAt: typeof c.createdAt === 'string' ? c.createdAt : new Date().toISOString(),
+      }));
+    if (clean.length === 0) return false;
+    save([...collections, ...clean]);
+    return true;
+  }, [collections, save]);
+
   return useMemo(() => ({
     collections,
     createCollection,
+    renameCollection,
     deleteCollection,
     toggleFontInCollection,
-  }), [collections, createCollection, deleteCollection, toggleFontInCollection]);
+    importCollections,
+  }), [collections, createCollection, renameCollection, deleteCollection, toggleFontInCollection, importCollections]);
 }

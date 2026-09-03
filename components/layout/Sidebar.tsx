@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useFontStore } from '@/store/useFontStore';
 import { FAVORITE_KEYS, useLocalStorageList } from '@/lib/storage';
+import { allFonts } from '@/lib/fonts';
 
 const CATEGORIES = [
   { id: 'sans-serif', label: 'Sans Serif' },
@@ -146,6 +147,7 @@ function FilterPill({ label, active, onClick }: FilterPillProps) {
   return (
     <button
       onClick={onClick}
+      aria-pressed={active}
       className={`text-[11px] px-2.5 py-1 rounded-[4px] border transition-colors duration-100 cursor-pointer ${
         active
           ? 'bg-accent/10 border-accent/40 text-accent'
@@ -174,6 +176,7 @@ export function SidebarContent({ onClose, isMobile }: SidebarContentProps) {
     clearAllFilters,
   } = useFontStore();
   const { items: favorites } = useLocalStorageList(FAVORITE_KEYS.fonts);
+  const variableCount = useMemo(() => allFonts.filter((f) => f.isVariable).length, []);
 
   const hasActiveFilters =
     activeCategories.length > 0 ||
@@ -275,7 +278,7 @@ export function SidebarContent({ onClose, isMobile }: SidebarContentProps) {
           </button>
           <span className="text-xs text-text-muted group-hover:text-text-primary transition-colors">
             Variable only
-            <span className="font-mono text-text-subtle ml-1 text-[10px]">(184)</span>
+            <span className="font-mono text-text-subtle ml-1 text-[10px]">({variableCount.toLocaleString()})</span>
           </span>
         </label>
       </Section>

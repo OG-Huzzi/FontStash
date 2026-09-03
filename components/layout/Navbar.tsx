@@ -67,7 +67,7 @@ export function Navbar({ onOpenMobileSidebar }: { onOpenMobileSidebar?: () => vo
     (variableOnly ? 1 : 0);
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-background border-b border-border h-14 flex items-center px-4 gap-4">
+    <nav aria-label="Primary" className="fixed top-0 left-0 right-0 z-50 bg-background border-b border-border h-14 flex items-center px-4 gap-4">
       {/* Mobile sidebar trigger — only on homepage */}
       {isHomepage && onOpenMobileSidebar && (
         <button
